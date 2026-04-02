@@ -16,9 +16,9 @@ from sklearn.utils.class_weight import compute_class_weight
 
 # Configuration
 IMG_SIZE = 224
-BATCH_SIZE = 16
+BATCH_SIZE = 32
 EPOCHS = 20
-DATASET_DIR = os.path.join(os.path.dirname(__file__), "dataset")
+DATASET_DIR = os.path.join(os.path.dirname(__file__), "PlantVillage-Dataset", "raw", "color")
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "crop_disease_model.h5")
 LABELS_PATH = os.path.join(os.path.dirname(__file__), "class_labels.json")
 
@@ -39,14 +39,12 @@ def clean_dataset(dataset_dir):
             if not os.path.isfile(filepath):
                 continue
 
-            # Check extension
             ext = os.path.splitext(filename)[1].lower()
             if ext not in valid_extensions:
                 os.remove(filepath)
                 removed += 1
                 continue
 
-            # Try to open and verify the image
             try:
                 img = tf.io.read_file(filepath)
                 img = tf.image.decode_image(img, channels=3)
@@ -68,10 +66,8 @@ def create_model(num_classes):
         input_shape=(IMG_SIZE, IMG_SIZE, 3)
     )
 
-    # Freeze base model layers
     base_model.trainable = False
 
-    # Add classification head
     x = base_model.output
     x = GlobalAveragePooling2D()(x)
     x = BatchNormalization()(x)
@@ -93,13 +89,16 @@ def train():
     print("=" * 60)
 
     if not os.path.exists(DATASET_DIR):
-        print("ERROR: Dataset directory not found. Run download_images.py first.")
+        print(f"ERROR: Dataset directory not found at: {DATASET_DIR}")
+        print("Make sure PlantVillage-Dataset is cloned in backend folder.")
         return
+
+    print(f"Dataset path: {DATASET_DIR}")
 
     # Clean dataset
     clean_dataset(DATASET_DIR)
 
-    # Data generators with augmentation
+    # Data generators
     train_datagen = ImageDataGenerator(
         rescale=1.0 / 255,
         rotation_range=30,
@@ -143,29 +142,28 @@ def train():
 
     num_classes = len(train_generator.class_indices)
     print(f"\nNumber of classes: {num_classes}")
-    print(f"Classes: {list(train_generator.class_indices.keys())}")
     print(f"Training samples: {train_generator.samples}")
     print(f"Validation samples: {val_generator.samples}")
 
     # Save class labels
     class_labels = {str(v): k for k, v in train_generator.class_indices.items()}
 
-    # Create human-readable labels
     readable_labels = {}
     for idx, class_name in class_labels.items():
-        crop = class_name.split("_")[0]
-        disease = " ".join(class_name.split("_")[1:])
+        parts = class_name.split("___")
+        crop = parts[0] if len(parts) > 0 else class_name
+        disease = parts[1] if len(parts) > 1 else "Unknown"
         readable_labels[idx] = {
             "class_name": class_name,
             "crop": crop,
-            "disease": disease if disease != "Healthy" else "Healthy",
+            "disease": disease,
         }
 
     with open(LABELS_PATH, 'w') as f:
         json.dump(readable_labels, f, indent=2)
     print(f"\nClass labels saved to: {LABELS_PATH}")
 
-    # Compute class weights for imbalanced data
+    # Class weights
     class_weights = compute_class_weight(
         'balanced',
         classes=np.unique(train_generator.classes),
@@ -182,8 +180,6 @@ def train():
         loss='categorical_crossentropy',
         metrics=['accuracy']
     )
-
-    model.summary()
 
     # Callbacks
     callbacks = [
@@ -208,7 +204,7 @@ def train():
         )
     ]
 
-    # Phase 1: Train with frozen base
+    # Phase 1: Frozen base
     print("\n" + "=" * 60)
     print("  Phase 1: Training classification head (base frozen)")
     print("=" * 60)
@@ -222,13 +218,12 @@ def train():
         verbose=1
     )
 
-    # Phase 2: Fine-tune top layers of base model
+    # Phase 2: Fine-tuning
     print("\n" + "=" * 60)
     print("  Phase 2: Fine-tuning top layers")
     print("=" * 60)
 
     base_model.trainable = True
-    # Freeze all layers except the last 30
     for layer in base_model.layers[:-30]:
         layer.trainable = False
 

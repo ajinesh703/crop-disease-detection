@@ -4,34 +4,29 @@ Serves predictions from the trained MobileNetV2 model.
 """
 
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
 import json
 import io
+import warnings
+warnings.filterwarnings('ignore')
+
 import numpy as np
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image
 import tensorflow as tf
+tf.get_logger().setLevel('ERROR')
 
-app = FastAPI(
-    title="Crop Disease Detection API",
-    description="Detect diseases in crop leaves using deep learning",
-    version="1.0.0"
-)
-
-# CORS middleware for frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Global model and labels
 model = None
 class_labels = None
 IMG_SIZE = 224
+CONFIDENCE_THRESHOLD = 0.5
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "crop_disease_model.h5")
 LABELS_PATH = os.path.join(os.path.dirname(__file__), "class_labels.json")
@@ -57,10 +52,28 @@ def load_model():
         print(f"WARNING: Labels file not found at {LABELS_PATH}")
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Load model on startup."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load model on startup, cleanup on shutdown."""
     load_model()
+    yield
+
+
+app = FastAPI(
+    title="Crop Disease Detection API",
+    description="Detect diseases in crop leaves using deep learning",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def preprocess_image(image_bytes: bytes) -> np.ndarray:
@@ -79,46 +92,35 @@ async def health_check():
     return {
         "status": "ok",
         "model_loaded": model is not None,
-        "labels_loaded": class_labels is not None
+        "labels_loaded": class_labels is not None,
+        "num_classes": len(class_labels) if class_labels else 0
     }
 
 
 @app.get("/crops")
 async def get_crops():
-    """Return supported crops and their diseases."""
-    crops = {
-        "Sugarcane": {
-            "diseases": ["Red Rot", "Smut", "Rust"],
-            "description": "Common sugarcane leaf diseases",
-            "icon": "🌾"
-        },
-        "Pulses": {
-            "diseases": ["Anthracnose", "Powdery Mildew", "Rust"],
-            "description": "Common pulse crop diseases",
-            "icon": "🫘"
-        },
-        "Maize": {
-            "diseases": ["Northern Leaf Blight", "Common Rust", "Gray Leaf Spot"],
-            "description": "Common maize/corn diseases",
-            "icon": "🌽"
-        },
-        "Wheat": {
-            "diseases": ["Leaf Rust", "Septoria", "Yellow Rust"],
-            "description": "Common wheat diseases",
-            "icon": "🌾"
-        },
-        "Paddy": {
-            "diseases": ["Blast", "Brown Spot", "Leaf Scald"],
-            "description": "Common paddy/rice diseases",
-            "icon": "🌾"
-        },
-        "Mustard": {
-            "diseases": ["White Rust", "Alternaria Blight", "Downy Mildew"],
-            "description": "Common mustard diseases",
-            "icon": "🌿"
-        }
+    """Return all supported crops and diseases from actual class_labels.json."""
+    if class_labels is None:
+        raise HTTPException(status_code=503, detail="Labels not loaded.")
+
+    crops = {}
+    for idx, info in class_labels.items():
+        crop = info.get("crop", "Unknown")
+        disease = info.get("disease", "Unknown")
+
+        if crop not in crops:
+            crops[crop] = {"diseases": [], "total_classes": 0}
+
+        if disease not in crops[crop]["diseases"]:
+            crops[crop]["diseases"].append(disease)
+
+        crops[crop]["total_classes"] += 1
+
+    return {
+        "total_crops": len(crops),
+        "total_classes": len(class_labels),
+        "crops": crops
     }
-    return crops
 
 
 @app.post("/predict")
@@ -127,7 +129,7 @@ async def predict(file: UploadFile = File(...)):
     if model is None or class_labels is None:
         raise HTTPException(
             status_code=503,
-            detail="Model not loaded. Please train the model first by running train_model.py"
+            detail="Model not loaded. Please run train_model.py first."
         )
 
     # Validate file type
@@ -139,22 +141,27 @@ async def predict(file: UploadFile = File(...)):
         )
 
     try:
-        # Read and preprocess image
         image_bytes = await file.read()
         img_array = preprocess_image(image_bytes)
 
-        # Make prediction
         predictions = model.predict(img_array, verbose=0)
         predicted_class_idx = np.argmax(predictions[0])
         confidence = float(predictions[0][predicted_class_idx])
 
-        # Get class info
+        # Low confidence check
+        if confidence < CONFIDENCE_THRESHOLD:
+            return JSONResponse(content={
+                "success": False,
+                "message": f"Low confidence ({round(confidence * 100, 2)}%). Please upload a clearer leaf image.",
+                "confidence": round(confidence * 100, 2)
+            })
+
         class_info = class_labels.get(str(predicted_class_idx), {})
         crop = class_info.get("crop", "Unknown")
         disease = class_info.get("disease", "Unknown")
         class_name = class_info.get("class_name", "Unknown")
 
-        # Get top 3 predictions
+        # Top 3 predictions
         top_3_indices = np.argsort(predictions[0])[-3:][::-1]
         top_3 = []
         for idx in top_3_indices:
@@ -162,7 +169,7 @@ async def predict(file: UploadFile = File(...)):
             top_3.append({
                 "crop": info.get("crop", "Unknown"),
                 "disease": info.get("disease", "Unknown"),
-                "confidence": float(predictions[0][idx])
+                "confidence": round(float(predictions[0][idx]) * 100, 2)
             })
 
         return JSONResponse(content={
@@ -172,7 +179,7 @@ async def predict(file: UploadFile = File(...)):
                 "disease": disease,
                 "class_name": class_name,
                 "confidence": round(confidence * 100, 2),
-                "is_healthy": disease.lower() == "healthy"
+                "is_healthy": "healthy" in disease.lower()
             },
             "top_predictions": top_3
         })
@@ -183,4 +190,4 @@ async def predict(file: UploadFile = File(...)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
