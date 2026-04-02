@@ -25,17 +25,13 @@ interface PredictionResult {
 
 interface CropInfo {
   diseases: string[]
-  description: string
-  icon: string
+  total_classes: number
 }
 
-const DEFAULT_CROPS: Record<string, CropInfo> = {
-  Sugarcane: { diseases: ['Red Rot', 'Smut', 'Rust'], description: 'Common sugarcane leaf diseases', icon: '🌾' },
-  Pulses: { diseases: ['Anthracnose', 'Powdery Mildew', 'Rust'], description: 'Common pulse crop diseases', icon: '🫘' },
-  Maize: { diseases: ['Northern Leaf Blight', 'Common Rust', 'Gray Leaf Spot'], description: 'Common maize/corn diseases', icon: '🌽' },
-  Wheat: { diseases: ['Leaf Rust', 'Septoria', 'Yellow Rust'], description: 'Common wheat diseases', icon: '🌾' },
-  Paddy: { diseases: ['Blast', 'Brown Spot', 'Leaf Scald'], description: 'Common paddy/rice diseases', icon: '🍚' },
-  Mustard: { diseases: ['White Rust', 'Alternaria Blight', 'Downy Mildew'], description: 'Common mustard diseases', icon: '🌿' },
+interface CropsResponse {
+  total_crops: number
+  total_classes: number
+  crops: Record<string, CropInfo>
 }
 
 function App() {
@@ -45,14 +41,14 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isDragOver, setIsDragOver] = useState(false)
-  const [crops, setCrops] = useState<Record<string, CropInfo>>(DEFAULT_CROPS)
+  const [cropsData, setCropsData] = useState<CropsResponse | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     fetch(`${API_URL}/crops`)
       .then(res => res.json())
-      .then(data => setCrops(data))
-      .catch(() => setCrops(DEFAULT_CROPS))
+      .then(data => setCropsData(data))
+      .catch(() => setCropsData(null))
   }, [])
 
   const handleFile = useCallback((file: File) => {
@@ -136,7 +132,7 @@ function App() {
             <span className="nav-logo">🌱</span>
             <span className="nav-title">CropGuard AI</span>
           </div>
-          <span className="nav-badge">v1.0 • ML Powered</span>
+          <span className="nav-badge">v1.0 &bull; ML Powered</span>
         </div>
       </nav>
 
@@ -150,7 +146,7 @@ function App() {
           </h1>
           <p className="hero-subtitle">
             Upload a photo of a crop leaf and our deep learning model will detect diseases
-            across sugarcane, pulses, maize, wheat, paddy, and mustard.
+            with 96%+ accuracy across {cropsData?.total_crops ?? '...'} crop types and {cropsData?.total_classes ?? '...'} disease classes.
           </p>
         </div>
       </section>
@@ -166,22 +162,20 @@ function App() {
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
                 onClick={() => fileInputRef.current?.click()}
-                id="dropzone"
               >
                 <span className="dropzone-icon">📸</span>
                 <p className="dropzone-title">Drop your crop leaf image here</p>
                 <p className="dropzone-subtitle">or click to browse files</p>
                 <button className="dropzone-btn" type="button">
-                  <span>📁</span> Choose Image
+                  📁 Choose Image
                 </button>
-                <p className="dropzone-formats">Supports JPG, PNG, WebP • Max 10MB</p>
+                <p className="dropzone-formats">Supports JPG, PNG, WebP &bull; Max 10MB</p>
                 <input
                   ref={fileInputRef}
                   type="file"
                   accept="image/*"
                   onChange={handleFileSelect}
                   style={{ display: 'none' }}
-                  id="file-input"
                 />
               </div>
             )}
@@ -197,14 +191,12 @@ function App() {
             {preview && !loading && (
               <>
                 <div className="preview-section">
-                  {/* Image preview */}
                   <div className="preview-image-card">
-                    <button className="preview-remove" onClick={clearImage} title="Remove image">✕</button>
+                    <button className="preview-remove" onClick={clearImage} title="Remove image">&times;</button>
                     <img src={preview} alt="Uploaded crop leaf" />
                     <p className="preview-filename">{selectedFile?.name}</p>
                   </div>
 
-                  {/* Results */}
                   {result ? (
                     <div className="result-card">
                       <div className="result-header">
@@ -243,10 +235,10 @@ function App() {
                           {result.top_predictions.map((pred, i) => (
                             <div className="prediction-item" key={i}>
                               <span className="prediction-name">
-                                {pred.crop} — {pred.disease}
+                                {pred.crop} &ndash; {pred.disease}
                               </span>
                               <span className="prediction-conf">
-                                {(pred.confidence * 100).toFixed(1)}%
+                                {pred.confidence.toFixed(1)}%
                               </span>
                             </div>
                           ))}
@@ -264,14 +256,14 @@ function App() {
                 </div>
 
                 {!result && (
-                  <button className="analyze-btn" onClick={analyzeImage} disabled={loading} id="analyze-btn">
-                    <span>🧬</span> Analyze Image
+                  <button className="analyze-btn" onClick={analyzeImage} disabled={loading}>
+                    🧬 Analyze Image
                   </button>
                 )}
 
                 {result && (
                   <button className="analyze-btn" onClick={clearImage} style={{ background: 'rgba(255,255,255,0.06)', marginTop: 20 }}>
-                    <span>🔄</span> Upload Another Image
+                    🔄 Upload Another Image
                   </button>
                 )}
               </>
@@ -291,30 +283,43 @@ function App() {
       <section className="crops-section">
         <div className="container">
           <div className="section-header">
-            <h2 className="section-title">Supported Crops & Diseases</h2>
-            <p className="section-subtitle">Our model can detect the following diseases across 6 crop types</p>
+            <h2 className="section-title">Supported Crops &amp; Diseases</h2>
+            <p className="section-subtitle">
+              Our model detects {cropsData?.total_classes ?? '38'} disease classes across {cropsData?.total_crops ?? '...'} crop types
+            </p>
           </div>
 
           <div className="crops-grid">
-            {Object.entries(crops).map(([name, info]) => (
-              <div className="crop-card" key={name}>
-                <div className="crop-card-header">
-                  <span className="crop-emoji">{info.icon}</span>
-                  <h3 className="crop-name">{name}</h3>
+            {cropsData ? (
+              Object.entries(cropsData.crops).map(([cropName, info]) => (
+                <div className="crop-card" key={cropName}>
+                  <div className="crop-card-header">
+                    <span className="crop-emoji">🌿</span>
+                    <h3 className="crop-name">{cropName}</h3>
+                  </div>
+                  <p className="crop-desc">{info.total_classes} disease class{info.total_classes > 1 ? 'es' : ''}</p>
+                  <div className="crop-diseases">
+                    {info.diseases.map((disease) => (
+                      <span
+                        className="disease-tag"
+                        key={disease}
+                        style={disease.toLowerCase() === 'healthy' ? {
+                          background: 'rgba(16, 185, 129, 0.08)',
+                          color: '#6ee7b7',
+                          borderColor: 'rgba(16, 185, 129, 0.15)'
+                        } : {}}
+                      >
+                        {disease.toLowerCase() === 'healthy' ? '✓ ' : ''}{disease}
+                      </span>
+                    ))}
+                  </div>
                 </div>
-                <p className="crop-desc">{info.description}</p>
-                <div className="crop-diseases">
-                  {info.diseases.map((disease) => (
-                    <span className="disease-tag" key={disease}>{disease}</span>
-                  ))}
-                  <span className="disease-tag" style={{
-                    background: 'rgba(16, 185, 129, 0.08)',
-                    color: '#6ee7b7',
-                    borderColor: 'rgba(16, 185, 129, 0.15)'
-                  }}>Healthy ✓</span>
-                </div>
-              </div>
-            ))}
+              ))
+            ) : (
+              <p style={{ color: 'var(--text-muted)', textAlign: 'center', gridColumn: '1/-1' }}>
+                Loading crops data...
+              </p>
+            )}
           </div>
         </div>
       </section>
@@ -322,7 +327,7 @@ function App() {
       {/* Footer */}
       <footer className="footer">
         <div className="container">
-          <p>CropGuard AI • Built with MobileNetV2 + FastAPI + React</p>
+          <p>CropGuard AI &bull; Built with MobileNetV2 + FastAPI + React &bull; 96%+ Accuracy</p>
         </div>
       </footer>
     </div>
