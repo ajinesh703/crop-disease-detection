@@ -21,6 +21,22 @@ An AI-powered web application that detects crop leaf diseases using deep learnin
 
 ---
 
+## 📸 Screenshots
+
+### Home — Upload Interface
+![CropGuard AI Home](screenshots/screenshot_home.png)
+> Upload a crop leaf image via drag & drop or file browser.
+
+### Supported Crops & Diseases
+![Supported Crops](screenshots/screenshot_crops.png)
+> Browse all 38 disease classes across 14 crop types supported by the model.
+
+### Disease Detection Result
+![Detection Result](screenshots/screenshot_result.png)
+> Instant diagnosis with confidence score and top-3 predictions.
+
+---
+
 ## 🗂️ Project Structure
 
 ```
